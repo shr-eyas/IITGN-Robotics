@@ -32,9 +32,6 @@ catkin_package(
 
 catkin_install_python(PROGRAMS
   scripts/aruco_pub.py
-  scripts/motor_state_pub.py
-  scripts/grasp_pub.py
-  scripts/hand_jac_pub.py
   scripts/init_motors.py
   scripts/main_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

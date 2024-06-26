@@ -380,19 +380,9 @@ class DynamixelReader:
 
         self.operation = self.client.dxl.GroupBulkRead(client.port_handler,
                                                        client.packet_handler)
-        
-
-        # self.operation = self.client.dxl.GroupSyncRead(client.port_handler,
-        #                                                    client.packet_handler,
-        #                                                    address,
-        #                                                    size)
 
         for motor_id in motor_ids:
-
             success = self.operation.addParam(motor_id, address, size)
-
-            # success = self.operation.addParam(motor_id)
-
             if not success:
                 raise OSError(
                     '[Motor ID: {}] Could not add parameter to bulk read.'

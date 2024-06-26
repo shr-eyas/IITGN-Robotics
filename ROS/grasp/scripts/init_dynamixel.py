@@ -15,7 +15,7 @@ def init():
     redundant_motor_ids = [12, 14, 22, 24]
     motor_ids = [11, 13, 21, 23]
     ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2']
-    baudrate = 4000000
+    baudrate = 57600
     dxl_client = None
     redundant_dxl_client = None
 
@@ -43,20 +43,25 @@ def fix():
     redundant_dxl_client.set_torque_enabled(redundant_motor_ids, True)
     redundant_dxl_client.write_desired_pos(redundant_motor_ids, desired_positions)
     node = DynamixelServiceNode(dxl_client)
-    rospy.spin()
+    node.spin()
 
 class DynamixelServiceNode:
 
     def __init__(self, dxl_client):
-
         self.dxl_client = dxl_client
+
+        # Initialize publisher
+        self.pub = rospy.Publisher('motor_positions', Float64MultiArray, queue_size=10)
 
         rospy.Service('get_position', GetPosition, self.handle_get_position)
         rospy.Service('get_velocity', GetVelocity, self.handle_get_velocity)
         rospy.Service('set_position', SetPosition, self.handle_set_position)
         rospy.Service('reset_motor', ResetMotor, self.handle_reset_motor)
         rospy.Service('set_current', SetCurrent, self.handle_set_current)
-    
+        
+        # Call and publish position periodically
+        rospy.Timer(rospy.Duration(1.0/10), self.publish_position)
+
     def handle_get_position(self, req):
         pos = self.dxl_client.read_pos()
         # This sets the frame as per the theory used for this work.
@@ -65,7 +70,7 @@ class DynamixelServiceNode:
         pos[2] -= np.pi/2
         pos[3] -= np.pi
         positions = [pos[0], pos[1], pos[2], pos[3]]
-        return GetPositionResponse(pos)
+        return GetPositionResponse(positions)
     
     def handle_get_velocity(self, req):
         vel = self.dxl_client.read_vel()
@@ -98,6 +103,19 @@ class DynamixelServiceNode:
         self.dxl_client.write_desired_cur(motor_ids, desired_currents)
         rospy.loginfo(f"Currents are set to desired value.")
         return SetCurrentResponse(True)
+
+    def publish_position(self, event):
+        # Call the 'get_position' service and publish the result
+        try:
+            rospy.wait_for_service('get_position')
+            get_position = rospy.ServiceProxy('get_position', GetPosition)
+            response = get_position()
+            msg = Float64MultiArray(data=response.position)
+            self.pub.publish(msg)
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Service call failed: {e}")
+        except rospy.ROSException as e:
+            rospy.logwarn(f"Service not available: {e}")
 
     def spin(self):
         rospy.spin()

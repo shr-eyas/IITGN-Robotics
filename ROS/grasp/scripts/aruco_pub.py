@@ -59,7 +59,7 @@ def get_marker_info(pipeline, marker_length, camera_matrix, dist_coeffs, diction
 def main():
     rospy.init_node('aruco_publisher', anonymous=True)
     pub = rospy.Publisher('aruco_data', Float64MultiArray, queue_size=10)
-    rate = rospy.Rate(10)  # 10 Hz
+    rate = rospy.Rate(10) 
 
     pipeline = rs.pipeline()
     config = rs.config()

@@ -2,14 +2,25 @@
 
 import rospy
 import numpy as np
+from numpy import sqrt, pi, cos, sin, arctan2, array 
 
 from std_msgs.msg import Float64MultiArray
-from grasp.srv import SetPosition, SetPositionRequest, ResetMotor, ResetMotorRequest, SetCurrent, SetCurrentRequest
+from grasp.srv import GetPosition, SetPosition, SetPositionRequest, ResetMotor, ResetMotorRequest, SetCurrent, SetCurrentRequest
 
 '''
 FUNCTIONS TO HANDLE MOTORS
 _____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
 '''
+def get_motor_position():
+    rospy.wait_for_service('get_position')
+    try:
+        get_position = rospy.ServiceProxy('get_position', GetPosition)
+        response = get_position()
+        return response.position
+    except rospy.ServiceException as e:
+        rospy.logerr(f"Service call failed: {e}")
+        return []
+    
 def send_pose(positions):
     rospy.wait_for_service('set_position')
     try:
@@ -47,10 +58,56 @@ def send_current(currents):
         return False
 
 '''
+UTILITY FUNCTIONS
+_____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+'''
+def grasp(a, theta):
+    return array([[-sin(theta), -cos(theta), sin(theta), cos(theta)], 
+        [cos(theta), -sin(theta), -cos(theta), sin(theta)], 
+        [a*sin(theta)**2 + a*cos(theta)**2, 0, a*sin(theta)**2 + a*cos(theta)**2, 0]])
+    
+def handJacobian(theta, L, phi):
+    link1 = L[0]
+    link2 = L[1]
+    q1 = phi[0]
+    q2 = phi[1]
+    q3 = phi[2]
+    q4 = phi[3]
+    return array([[-(-link1*sin(q1) - link2*sin(q1 + q2))*sin(theta) + (link1*cos(q1) + link2*cos(q1 + q2))*cos(theta), link2*sin(theta)*sin(q1 + q2) + link2*cos(theta)*cos(q1 + q2), 0, 0], 
+        [-(-link1*sin(q1) - link2*sin(q1 + q2))*cos(theta) - (link1*cos(q1) + link2*cos(q1 + q2))*sin(theta), -link2*sin(theta)*cos(q1 + q2) + link2*sin(q1 + q2)*cos(theta), 0, 0], 
+        [0, 0, (-link1*sin(q3) - link2*sin(q3 + q4))*sin(theta) - (link1*cos(q3) + link2*cos(q3 + q4))*cos(theta), -link2*sin(theta)*sin(q3 + q4) - link2*cos(theta)*cos(q3 + q4)], 
+        [0, 0, (-link1*sin(q3) - link2*sin(q3 + q4))*cos(theta) + (link1*cos(q3) + link2*cos(q3 + q4))*sin(theta), link2*sin(theta)*cos(q3 + q4) - link2*sin(q3 + q4)*cos(theta)]])
+
+def elbowUpIK(X, Y, l1, l2):
+    d = sqrt(X**2 + Y**2)
+    calpha = (l1**2 + l2**2 - d**2) / (2 * l1 * l2)
+    salpha = sqrt(1 - calpha**2)
+    alpha = arctan2(salpha, calpha)
+    q2 = pi - alpha
+    alp = arctan2(Y, X)
+    beta = arctan2(l2 * sin(q2), l1 + l2 * cos(q2))
+    q1 = alp - beta
+    return q1, q2
+
+def elbowDownIK(X, Y, l1, l2):
+    d = sqrt(X**2 + Y**2)
+    calpha = (l1**2 + l2**2 - d**2) / (2 * l1 * l2)
+    salpha = sqrt(1 - calpha**2)
+    alpha = arctan2(salpha, calpha)
+    q2 = pi - alpha
+    alp = arctan2(Y, X)
+    calpha1 = (l1**2 + d**2 - l2**2) / (2 * l1 * d)
+    salpha1 = sqrt(1 - calpha1**2)
+    beta = arctan2(salpha1, calpha1)
+    q1 = alp + beta
+    q2 = -q2
+    return q1, q2
+    
+'''
 INITIALIZATIONS
 _____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
 '''
-dt = 1/100.0  # Time step
+dt = 1/1000.0  # Time step
 T = 1 # Total time for each trajectory
 t = np.arange(0, T, dt)
 n_samples = int(T/dt)  # Number of samples in the trajectory
@@ -58,6 +115,18 @@ freq = 1/dt  # Frequency of control loop
 trials = 100
 Kt1 = 0.35
 Kt2 = 0.51
+
+a = 0.0375
+L = [0.104, 0.085]
+
+Kt1 = 0.35
+Kt2 = 0.51
+
+x1h, y1h = -80, 142
+x2h, y2h = 80, 135
+q1h, q2h =   elbowUpIK(x1h, y1h, L[0]*1000, L[1]*1000)
+q3h, q4h = elbowDownIK(x2h, y2h, L[0]*1000, L[1]*1000)
+homePosition = [q1h, q2h, q3h, q4h]
 
 # The side length of the cube is set and used in Grasp Matrix and 
 # Impedance Parameters
@@ -68,31 +137,26 @@ thetaDes = 0
 KpX = 5000
 KpY = 0
 KpTheta = 50
-Kp = np.array([[KpX, 0, 0], 
-               [0, KpY, 0], 
-               [0, 0, KpTheta]]) 
+Kp = array([[KpX, 0, 0], 
+            [0, KpY, 0], 
+            [0, 0, KpTheta]]) 
 
 '''
 DATA HANDLING
 _____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
 '''
 latest_data = {
-    'object_position': None,
-    'grasp_matrix': None,
-    'hand_jacobian': None,
+    'object_position': None
+    # 'motor_position': None
 }
     
 def aruco_callback(data):
     position = data.data 
     update_dictionary('object_position', position)
 
-def grasp_callback(data):
-    grasp = data.data
-    update_dictionary('grasp_matrix', grasp)
-
-def hand_jacobian_callback(data):
-    hand_jac = data.data
-    update_dictionary('hand_jacobian', hand_jac)
+# def motor_callback(data):
+#     motor_position = data.data 
+#     update_dictionary('motor_position', motor_position)
 
 def update_dictionary(key, value):
     latest_data[key] = value
@@ -102,13 +166,85 @@ MAIN LOOP
 ________________________________________________________________________________________________________________________________________________
 '''
 def ilc():
+  
+    # position = [[np.pi/2, -np.pi/2, np.pi/2, 0],
+    #         [np.pi/2, -np.pi/4, np.pi/2, 0], 
+    #         [np.pi/2, 0, np.pi/2, 0],
+    #         [np.pi/2, np.pi/4, np.pi/2, 0],
+    #         [np.pi/2, np.pi/2, np.pi/2, 0]]
 
-    objectPosition = latest_data['object_position']
-    handJacobianFlattened = latest_data['hand_jacobian']
-    handJacobian = np.array(handJacobianFlattened).reshape((4, 4))
-    graspMatrixFlattened = latest_data['grasp_matrix']
-    graspMatrix = np.array(graspMatrixFlattened).reshape((3, 4))
-   
+    # for i in range(5):
+    #     send_pose(positions = position[i])
+
+    # rospy.loginfo("Waiting before disabled")
+    # rospy.sleep(2)
+
+    # disable_motors()
+    # rospy.loginfo("Disabled")
+
+    # rospy.loginfo("Waiting before setting currents")
+    # rospy.sleep(2)
+
+    # rospy.loginfo("Current Set")
+    # currents = [100, 0, 0, 0]  
+    # send_current(currents)
+    # rospy.sleep(5)
+    # disable_motors()
+
+    # rospy.loginfo("Set Current tested. Testing subscription.")
+
+
+    # while True:
+    #     
+    #     
+
+    for i in range(trials):
+
+        rospy.loginfo("Going to home position.")
+        send_pose(homePosition)
+        rospy.sleep(2)
+        rospy.loginfo("At home position.")
+
+        
+        disable_motors()
+        for j in range(len(t)):
+
+            objectPosition = latest_data['object_position']
+            # rospy.loginfo(f"Object Orientation{j}: {objectPosition[2]}")
+
+            theta = objectPosition[2]
+            G = grasp(a,theta)
+            # rospy.loginfo(f"Grasp Matrix{j}: {graspMatrix}")
+
+            motorPositions = get_motor_position()
+            rospy.loginfo(f" Motor Position{j}: {motorPositions}")
+
+
+            # motorPositions = latest_data['motor_position']
+            
+            Jh = handJacobian(theta, L, motorPositions)
+            # rospy.loginfo(f"Hand Jacobian{j}: {Jh} \n {Jh}")
+
+            f_null = (np.identity(4) - (np.linalg.pinv(G) @ G)) @ array([[500],[500],[500],[500]])
+            
+            rospy.loginfo(f"Motor Positions{j}: {f_null}")
+            
+            fingerF = f_null 
+
+            JhT = np.transpose(Jh)
+
+            tau = JhT @ fingerF
+
+            current = [tau[0], tau[1], tau[2], tau[3]]
+            current[0] = current[0]/Kt1
+            current[1] = current[1]/Kt2
+            current[2] = current[2]/Kt1
+            current[3] = current[3]/Kt2
+
+            
+            send_current(current)
+
+       
 # def trial_loop():
 
 #     for i in range(trials):
@@ -144,7 +280,7 @@ def ilc():
     
 '''
 MAIN FUNCTION
-________________________________________________________________________________________________________________________________________________
+_____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
 '''
 # def main():
 #     rospy.init_node('ilc_controller', anonymous=True)
@@ -180,52 +316,36 @@ ________________________________________________________________________________
 # if __name__ == "__main__":
 #     main()
 
-
 def main():
-    rospy.init_node('set_position_client_node')
 
+    rospy.init_node('ilc_node')
 
+    rospy.on_shutdown(disable_motors)
 
-    # positions = [np.pi/2, np.pi, np.pi/2, np.pi]  
-    # send_pose(positions)
+    rospy.loginfo("Waiting for ArUco data")
+    rospy.Subscriber('aruco_data', Float64MultiArray, aruco_callback)
 
+    # '''
+    # Experimental 
+    # _____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+    # '''
 
-    position = [[np.pi/2, -np.pi/2, np.pi/2, 0],
-                [np.pi/2, -np.pi/4, np.pi/2, 0], 
-                [np.pi/2, 0, np.pi/2, 0],
-                [np.pi/2, np.pi/4, np.pi/2, 0],
-                [np.pi/2, np.pi/2, np.pi/2, 0]]
+    # rospy.Subscriber('motor_positions', Float64MultiArray, motor_callback)
+
+    # '''
+    # Experimental
+    # _____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+    # '''
+
+    while latest_data['object_position'] is None:
+        rospy.sleep(0.1)
+
+    rospy.loginfo("Fetched ArUco data") 
+
+    ilc()
     
-    for i in range(5):
-        send_pose(positions = position[i])
-
-    rospy.loginfo("Waiting before disabled")
-    rospy.sleep(2)
-
-    disable_motors()
-    rospy.loginfo("Disabled")
-
-    rospy.loginfo("Waiting before setting currents")
-    rospy.sleep(2)
-
-    currents = [100, 0, 0, 0]  
-    send_current(currents)
-    rospy.loginfo("Current Set")
-
-
-    # rospy.spin()
+    rospy.spin()
 
 
 if __name__ == '__main__':
     main()
-
-'''
-i do not understand what exactly is causing this problem:
-
-when i run (in order)
-    init_motors.py
-    position_pub.py
-    main_node.py
-
-the nodes sometimes throws error while sometimes it works perfectly
-'''
